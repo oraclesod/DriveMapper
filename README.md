@@ -1,6 +1,6 @@
 # Drivemapper and Installer
 
-Deploy these applications together as an intunewin win32 app to map on-prem file shares on an Entra ID joined device (cloud only).
+Deploy these applications together as an intunewin win32 app to map on-prem file shares on an Entra ID joined device (cloud only) or deploy DriveMapper with PSADT.
 
 ## About install.exe
 
