@@ -118,6 +118,10 @@ namespace Install
                 TaskDefinition td = ts.NewTask();
                 td.RegistrationInfo.Description = $"Run {Path.GetFileName(exePath)} on {triggerType}";
 
+                // Set battery-related settings
+                td.Settings.DisallowStartIfOnBatteries = true;
+                td.Settings.StopIfGoingOnBatteries = true;
+
                 Trigger trigger = triggerType switch
                 {
                     TaskTriggerType.Logon => new LogonTrigger { Delay = TimeSpan.FromSeconds(10) },
