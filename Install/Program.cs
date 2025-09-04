@@ -119,8 +119,8 @@ namespace Install
                 td.RegistrationInfo.Description = $"Run {Path.GetFileName(exePath)} on {triggerType}";
 
                 // Set battery-related settings
-                td.Settings.DisallowStartIfOnBatteries = true;
-                td.Settings.StopIfGoingOnBatteries = true;
+                td.Settings.DisallowStartIfOnBatteries = false;
+                td.Settings.StopIfGoingOnBatteries = false;
 
                 Trigger trigger = triggerType switch
                 {
