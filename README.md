@@ -33,20 +33,13 @@ The installer reads all parameters from a JSON file. Example:
 {
   "TargetDirectory": "C:\\Program Files\\DriveMapper",
   "ExeName": "DriveMapper.exe",
-  "ShortcutName": "Drive Mapper",
+  "ShortcutName": "Map Network Drives",
   "Version": "1",
   "ScheduledTasks": [
     {
-      "TaskName": "DriveMapper-Logon",
-      "Arguments": "/map",
+      "TaskName": "DriveMapper",
+      "Arguments": "",
       "CreateLogonTask": true,
-      "CreateNetworkTask": false,
-      "CreateBootTask": false
-    },
-    {
-      "TaskName": "DriveMapper-NetworkChange",
-      "Arguments": "/sync",
-      "CreateLogonTask": false,
       "CreateNetworkTask": true,
       "CreateBootTask": false
     }
