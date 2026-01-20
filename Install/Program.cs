@@ -3,6 +3,7 @@ using Microsoft.Win32.TaskScheduler;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -11,6 +12,10 @@ namespace Install
 {
     class Program
     {
+        // Event log source to match DriveMapper logging
+        private const string EventLogName = "Application";
+        private const string EventLogSourceName = "DriveMapper";
+
         static void Main(string[] args)
         {
             if (args.Length != 2 || (args[1].ToLower() != "install" && args[1].ToLower() != "uninstall"))
@@ -50,6 +55,9 @@ namespace Install
                     }
 
                     string exePath = Path.Combine(config.TargetDirectory, config.ExeName);
+
+                    // Ensure event log source exists so DriveMapper can write to Application log without admin
+                    EnsureEventLogSource();
 
                     foreach (var task in config.ScheduledTasks)
                     {
@@ -102,12 +110,51 @@ namespace Install
                         Registry.LocalMachine.DeleteSubKeyTree($@"SOFTWARE\{exeKey}", false);
                     }
 
+                    // Optional: remove event log source on uninstall
+                    // (If you prefer to keep it, comment this out.)
+                    RemoveEventLogSource();
+
                     Console.WriteLine("Uninstallation complete.");
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Operation failed: {ex.Message}");
+            }
+        }
+
+        private static void EnsureEventLogSource()
+        {
+            try
+            {
+                if (!EventLog.SourceExists(EventLogSourceName))
+                {
+                    var data = new EventSourceCreationData(EventLogSourceName, EventLogName);
+                    EventLog.CreateEventSource(data);
+                }
+
+                // Optional: write a one-time install marker event
+                EventLog.WriteEntry(EventLogSourceName, "DriveMapper event log source created/verified by installer.", EventLogEntryType.Information);
+            }
+            catch (Exception ex)
+            {
+                // Not fatal to installation, but DriveMapper may fall back to console output.
+                Console.WriteLine($"Warning: failed to create/verify Event Log source '{EventLogSourceName}': {ex.Message}");
+            }
+        }
+
+        private static void RemoveEventLogSource()
+        {
+            try
+            {
+                if (EventLog.SourceExists(EventLogSourceName))
+                {
+                    EventLog.DeleteEventSource(EventLogSourceName);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: failed to remove Event Log source '{EventLogSourceName}': {ex.Message}");
             }
         }
 
@@ -118,13 +165,30 @@ namespace Install
                 TaskDefinition td = ts.NewTask();
                 td.RegistrationInfo.Description = $"Run {Path.GetFileName(exePath)} on {triggerType}";
 
-                // Set battery-related settings
+                // Battery-related settings
                 td.Settings.DisallowStartIfOnBatteries = false;
                 td.Settings.StopIfGoingOnBatteries = false;
 
+                // Recommended: if it misses a trigger (sleep/boot), run once it can
+                td.Settings.StartWhenAvailable = true;
+
+                // Prevent multiple concurrent instances (optional, but usually desirable)
+                td.Settings.MultipleInstances = TaskInstancesPolicy.IgnoreNew;
+
+                // Run in the context of the currently logged on user
+                td.Principal.LogonType = TaskLogonType.InteractiveToken;
+
+                // Optional: if you want it to run without admin rights (recommended for drive mapping)
+                td.Principal.RunLevel = TaskRunLevel.LUA;
+
                 Trigger trigger = triggerType switch
                 {
-                    TaskTriggerType.Logon => new LogonTrigger { Delay = TimeSpan.FromSeconds(10) },
+                    TaskTriggerType.Logon => new LogonTrigger
+                    {
+                        Delay = TimeSpan.FromSeconds(10),
+                        // UserId left null => any user logon
+                    },
+
                     TaskTriggerType.NetworkProfile => new EventTrigger
                     {
                         Subscription = @"<QueryList><Query Id='0' Path='Microsoft-Windows-NetworkProfile/Operational'>
@@ -132,15 +196,29 @@ namespace Install
                             *[System[Provider[@Name='Microsoft-Windows-NetworkProfile'] and (EventID=10000 or EventID=10001)]]
                             </Select></Query></QueryList>"
                     },
+
                     TaskTriggerType.Boot => new BootTrigger { Delay = TimeSpan.FromSeconds(10) },
+
                     _ => throw new ArgumentException("Unsupported trigger type")
                 };
 
                 td.Triggers.Add(trigger);
                 td.Actions.Add(new ExecAction(exePath, arguments, null));
-                ts.RootFolder.RegisterTaskDefinition(taskName, td, TaskCreation.CreateOrUpdate, "S-1-5-11", null, TaskLogonType.Group);
+
+                // Register task:
+                // - userId/password null
+                // - InteractiveToken means it runs as the *interactive* user at trigger time
+                ts.RootFolder.RegisterTaskDefinition(
+                    taskName,
+                    td,
+                    TaskCreation.CreateOrUpdate,
+                    userId: null,
+                    password: null,
+                    logonType: TaskLogonType.InteractiveToken
+                );
             }
         }
+
 
         [ComImport]
         [Guid("00021401-0000-0000-C000-000000000046")]
