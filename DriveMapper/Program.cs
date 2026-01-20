@@ -1,81 +1,126 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.DirectoryServices.AccountManagement;
-using System.IO;
-using System.Runtime.InteropServices;
-using System.Security.Principal;
-using Newtonsoft.Json; 
 using System.Linq;
+using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 namespace DriveMapper
 {
     class Program
     {
+        private const string DrivesBaseKey = @"Software\Policies\DriveMapper\Drives";
+
+        // WNetAddConnection2 flags
+        private const int CONNECT_UPDATE_PROFILE = 0x00000001; // persistent
+        private const int CONNECT_TEMPORARY      = 0x00000004; // not persistent
+
         static void Main(string[] args)
         {
-            string configPath = AppDomain.CurrentDomain.BaseDirectory + "config.json";
-            if (!File.Exists(configPath))
+            var mappings = LoadMappingsFromPolicy();
+            if (mappings.Count == 0)
             {
-                Console.WriteLine("Configuration file not found.");
+                Console.WriteLine("No enabled drive mappings found in policy registry.");
                 return;
             }
 
-            var configContent = File.ReadAllText(configPath);
-            var config = JsonConvert.DeserializeObject<DriveMappingConfig>(configContent); 
-            var user = WindowsIdentity.GetCurrent();
-            var userName = user.Name.Split('\\')[1];
-            var userDomain = config.Domain;
-            var userGroups = GetUserGroups(userName, userDomain);
-
-            foreach (var mapping in config.DriveMappings)
-            {
-                if (userGroups.Any(group => group.Equals(mapping.Group, StringComparison.OrdinalIgnoreCase)))
-                {
-                    MapDrive(mapping);
-                }
-            }
+            foreach (var mapping in mappings)
+                MapDrive(mapping);
         }
 
-        static List<string> GetUserGroups(string username, string userdomain)
+        /// <summary>
+        /// Loads mappings from HKLM then HKCU; HKCU overwrites HKLM by drive letter.
+        /// Only includes Enabled=true items. Disabled items are ignored.
+        /// </summary>
+        static List<DriveMapping> LoadMappingsFromPolicy()
         {
-            var groups = new List<string>();
-            try
-            {
-                using (var context = new PrincipalContext(ContextType.Domain, userdomain))
-                {
-                    var user = UserPrincipal.FindByIdentity(context, username);
-                    if (user != null)
-                    {
-                        foreach (var group in user.GetAuthorizationGroups())
-                        {
-                            groups.Add(group.SamAccountName);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error retrieving groups for user {username} on domain {userdomain}: {ex.Message}");
-            }
-            return groups;
+            var merged = new Dictionary<string, DriveMapping>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var m in ReadEnabledMappingsFromHive(RegistryHive.LocalMachine))
+                merged[m.DriveLetter] = m;
+
+            foreach (var m in ReadEnabledMappingsFromHive(RegistryHive.CurrentUser))
+                merged[m.DriveLetter] = m;
+
+            return merged.Values
+                .OrderBy(m => m.DriveLetter, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
+
+        static IEnumerable<DriveMapping> ReadEnabledMappingsFromHive(RegistryHive hive)
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+            using var drivesKey = baseKey.OpenSubKey(DrivesBaseKey, writable: false);
+            if (drivesKey == null) yield break;
+
+            foreach (var letter in drivesKey.GetSubKeyNames())
+            {
+                if (string.IsNullOrWhiteSpace(letter) || letter.Length != 1)
+                    continue;
+
+                char c = char.ToUpperInvariant(letter[0]);
+                if (c < 'A' || c > 'Z')
+                    continue;
+
+                using var letterKey = drivesKey.OpenSubKey(letter, writable: false);
+                if (letterKey == null) continue;
+
+                bool enabled = ReadBool(letterKey, "Enabled", defaultValue: false);
+                if (!enabled) continue;
+
+                string name = ReadString(letterKey, "Name");
+                string path = ReadString(letterKey, "Path");
+                bool reconnect = ReadBool(letterKey, "Reconnect", defaultValue: false);
+
+                if (string.IsNullOrWhiteSpace(path))
+                    continue;
+
+                yield return new DriveMapping
+                {
+                    Name = name,
+                    Path = path,
+                    DriveLetter = c.ToString(),
+                    Reconnect = reconnect
+                };
+            }
+        }
+
+        static string ReadString(RegistryKey key, string valueName)
+            => key.GetValue(valueName, "") as string ?? "";
+
+        static bool ReadBool(RegistryKey key, string valueName, bool defaultValue)
+        {
+            object v = key.GetValue(valueName, null);
+            if (v == null) return defaultValue;
+
+            if (v is int i) return i != 0;
+            if (v is long l) return l != 0;      // <-- add this
+            if (v is string s)
+            {
+                if (bool.TryParse(s, out var b)) return b;
+                if (int.TryParse(s, out var n)) return n != 0;  // <-- nice extra
+            }
+
+            return defaultValue;
+        }
+
 
         static void MapDrive(DriveMapping mapping)
         {
+            // Remove any existing mapping first
             WNetCancelConnection2(mapping.DriveLetter + ":", 0, true);
+
+            int flags = mapping.Reconnect ? CONNECT_UPDATE_PROFILE : CONNECT_TEMPORARY;
+
             var result = WNetAddConnection2(new NETRESOURCE
             {
                 dwType = 1,
                 lpLocalName = mapping.DriveLetter + ":",
                 lpRemoteName = mapping.Path,
                 lpProvider = null
-            }, null, null, 0);
+            }, null, null, flags);
 
             if (result != 0)
-            {
                 Console.WriteLine($"Failed to map drive {mapping.DriveLetter}: to {mapping.Path}. Error code: {result}");
-                // Add specific error handling based on the error code
-            }
         }
 
         [DllImport("mpr.dll")]
@@ -97,18 +142,12 @@ namespace DriveMapper
             public string lpProvider = "";
         }
 
-        public class DriveMappingConfig
-        {
-            public string Domain { get; set; }
-            public List<DriveMapping> DriveMappings { get; set; }
-        }
         public class DriveMapping
         {
             public string Name { get; set; }
-            public string Group { get; set; }
             public string Path { get; set; }
             public string DriveLetter { get; set; }
+            public bool Reconnect { get; set; }
         }
     }
-
 }
