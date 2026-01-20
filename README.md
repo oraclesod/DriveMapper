@@ -1,41 +1,141 @@
-# Drivemapper and Installer
+# DriveMapper (Intune / Registry-Driven Edition)
 
-Deploy these applications together as an intunewin win32 app to map on-prem file shares on an Entra ID joined device (cloud only) or deploy DriveMapper with PSADT.
+DriveMapper is a lightweight Windows utility for **policy-driven network drive mapping** on Entra ID–joined or hybrid devices, designed for **Microsoft Intune deployments**.
 
-## About install.exe
+This fork replaces JSON / AD group–based configuration with **registry values delivered via Intune ADMX**, enabling modern, cloud-native drive mapping without logon scripts or Group Policy Preferences.
 
-Installer is a standalone .NET 8 installer utility that copies files to a target directory, registers scheduled tasks, and optionally creates a Start Menu shortcut. It's designed to be deployed via Intune or manually, with parameters provided via a JSON configuration file.
+---
 
-Drive Maps are controlled by ADMX that should be uploaded to Intune and applied to users (not machines)
+## Architecture Overview
 
-## Features
+- **DriveMapper.exe**
+  - Runs in the context of the **logged-in user**
+  - Reads drive mapping configuration from registry policy keys
+  - Maps, remaps, or removes drives as required
+  - Logs all actions and errors to the Windows Application Event Log
 
-- Copies all files from the installer's directory to a specified target directory.
-- Registers one or more scheduled tasks using configurable triggers:
+- **Install.exe**
+  - Copies files to a target directory
+  - Creates scheduled tasks (logon + network change)
+  - Creates the Event Log source used by DriveMapper
+  - Fully uninstallable
+  - Designed for Intune Win32 deployment
+
+---
+
+## Configuration Model (Intune / ADMX)
+
+Drive mappings are controlled via **ADMX-backed registry policy** applied to **users** (not machines).
+
+### Registry Locations
+
+For each drive letter (`A`–`Z`), DriveMapper reads:
+
+#### User policy (preferred)
+```
+HKCU\Software\Policies\DriveMapper\Drives\<LETTER>\
+```
+
+#### Machine policy (fallback)
+```
+HKLM\Software\Policies\DriveMapper\Drives\<LETTER>\
+```
+
+### Supported Values
+
+| Value Name | Type | Description |
+|-----------|------|-------------|
+| `Enabled` | DWORD (0/1) | Enables or disables the mapping |
+| `Path` | REG_SZ | UNC path (e.g. `\\server\\share`) |
+| `Name` | REG_SZ | Optional display name (best-effort) |
+| `Reconnect` | DWORD (0/1) | Persistent mapping |
+
+### Precedence Rules
+
+For each drive letter:
+
+1. HKLM mapping is read (if present)
+2. HKCU mapping is read (if present)
+3. **HKCU overrides HKLM** for that letter
+
+---
+
+## Runtime Behavior
+
+### Per-User Execution
+
+DriveMapper runs via **Scheduled Tasks configured with `InteractiveToken`**, meaning:
+
+- The task is created once, system-wide
+- At runtime, Windows executes it as the **currently logged-in user**
+- Each user receives **their own drive mappings**
+- Users do not affect each other, even on shared machines
+
+---
+
+### Idempotent Mapping Logic
+
+For each drive letter:
+
+- If the drive is already mapped to the correct path → **skip**
+- If mapped to a different path → **remap**
+- If `Enabled=0` → **remove mapping**
+- If policy no longer exists → **remove mapping (if previously applied)**
+
+DriveMapper only removes drives it previously created, tracked per user under:
+
+```
+HKCU\Software\DriveMapper\State\AppliedDrives
+```
+
+This prevents accidental removal of user-managed drives.
+
+---
+
+## Logging
+
+All actions and errors are written to the **Windows Application Event Log**:
+
+- **Log:** Application
+- **Source:** `DriveMapper`
+
+Logged events include:
+- Drive mapped
+- Drive removed
+- Mapping skipped (already correct)
+- Configuration errors
+- Win32 API failures
+
+The Event Log source is created by the installer during install (admin required).
+
+---
+
+## Installer (`Install.exe`)
+
+`Install.exe` is a standalone .NET 8 installer utility designed for Intune Win32 deployment.
+
+### Features
+
+- Copies files to a target directory (e.g. `Program Files`)
+- Registers scheduled tasks:
   - On user logon
-  - On network profile change
-  - On system boot
-- Optionally creates a Start Menu shortcut.
-- Fully uninstallable (removes files, scheduled tasks, and shortcut).
-- Supports multiple task definitions through a JSON configuration.
-- Uses only one command-line parameter (`install` or `uninstall`) plus a config path.
+  - On network profile change (VPN / Wi-Fi / Ethernet)
+- Runs DriveMapper **as the logged-in user**
+- Creates the `DriveMapper` Event Log source
+- Writes version info to HKLM for Intune detection
+- Fully uninstallable
 
-## Requirements
+---
 
-- .NET 8
-- Admin privileges (required to register tasks and copy to `Program Files`)
-- [Microsoft.Win32.TaskScheduler](https://www.nuget.org/packages/TaskScheduler/) NuGet package
-- [Newtonsoft.Json](https://www.nuget.org/packages/Newtonsoft.Json/) NuGet package
+## Installer Configuration (`install.config.json`)
 
-## Configuration File (`config.json`)
-
-The installer reads all parameters from a JSON file. Example:
+Example:
 
 ```json
 {
   "TargetDirectory": "C:\\Program Files\\DriveMapper",
   "ExeName": "DriveMapper.exe",
-  "ShortcutName": "Map Network Drives",
+  "ShortcutName": "",
   "Version": "1",
   "ScheduledTasks": [
     {
@@ -52,81 +152,84 @@ The installer reads all parameters from a JSON file. Example:
 ### Field Descriptions
 
 | Field | Description |
-|-------|-------------|
-| `TargetDirectory` | The directory where files will be copied. |
-| `ExeName` | The main executable name to launch from tasks and shortcut. |
-| `ShortcutName` | (Optional) Name for Start Menu shortcut. If omitted, no shortcut is created. |
-| `Version` | Set the version number in the registry to target Intune detection rules. |
-| `ScheduledTasks` | Array of scheduled task definitions. |
-| `TaskName` | (Optional) Name of the scheduled task. If omitted, uses `ExeName`. |
-| `Arguments` | Arguments to pass when the task is triggered. |
-| `CreateLogonTask` | Create task triggered on user logon. |
-| `CreateNetworkTask` | Create task triggered on network profile change. |
-| `CreateBootTask` | Create task triggered on system boot. |
+|------|-------------|
+| `TargetDirectory` | Destination directory for binaries |
+| `ExeName` | Executable launched by scheduled tasks |
+| `ShortcutName` | Optional Start Menu shortcut |
+| `Version` | Written to HKLM for Intune detection |
+| `ScheduledTasks` | One or more task definitions |
 
-## Usage
+---
 
-Run the executable with administrative privileges:
+## Installation & Uninstallation
 
-```bash
-Install.exe <path-to-config.json> install
-```
+Run from an **elevated prompt**:
 
-To uninstall (remove tasks, files, and shortcuts):
-
-```bash
-Install.exe <path-to-config.json> uninstall
-```
-
-### Example
-
-```bash
+### Install
+```powershell
 Install.exe install.config.json install
 ```
 
-## Start Menu Shortcut
-
-If `ShortcutName` is defined, a shortcut will be placed in:
-
-```
-C:\ProgramData\Microsoft\Windows\Start Menu\Programs
+### Uninstall
+```powershell
+Install.exe install.config.json uninstall
 ```
 
-This ensures compatibility with both Windows 10 and Windows 11.
+---
 
-## About DriveMapper.exe
+## Intune Deployment (Win32 App)
 
-`DriveMapper.exe` is a lightweight, command-line utility that automates the mapping of network drives based on business or environmental needs. It is typically deployed in enterprise environments where persistent drive mappings are required without relying on traditional logon scripts or Group Policy.
-
-### Key Features
-
-- Maps one or more network drives based on registry keys set by intune ADMX policy applied to users
-- Designed to be executed silently as a scheduled task.
-- Does not require user interaction once deployed.
-
-### Integration with Installer
-
-This utility is bundled alongside `Install.exe` and referenced within `config.json` as the `ExeName`. The installer schedules it to run under specific conditions (logon, boot, or network change) as configured, ensuring persistent and reliable drive availability for users.
-
-## Intune Deployment
-
-To deploy this installer via Intune:
-
-1. Package the following files using the [Microsoft Win32 Content Prep Tool](https://learn.microsoft.com/en-us/mem/intune/apps/apps-win32-app-management) Self-Contained exe and config files can be found in the build directory:
+1. Publish binaries as **self-contained single-file executables**
+2. Package:
    - `Install.exe`
-   - `install.config.json`
    - `DriveMapper.exe`
+   - `install.config.json`
+3. Create `.intunewin` package
+4. Configure:
+   - **Install command:**  
+     `Install.exe install.config.json install`
+   - **Uninstall command:**  
+     `Install.exe install.config.json uninstall`
+   - **Detection rule:**  
+     HKLM `SOFTWARE\<ExeNameWithoutExtension>\Version`
 
-2. Create an `.intunewin` file from the folder.
+Assignments should typically target **users**, not devices.
 
-3. In the Intune portal:
-   - Create a new Win32 app.
-   - Set the install command to: `Install.exe install.config.json install`
-   - Set the uninstall command to: `Install.exe install.config.json uninstall`
-   - Configure detection rules to check for the existence of the target HKLM/exeName/Version set by the installer.
-   - Assign to user or device groups as needed.
+---
 
+## Build
+
+```powershell
+dotnet restore
+dotnet build DriveMapper.sln -c Release
+```
+
+### Publish (recommended for Intune)
+
+```powershell
+dotnet publish .\DriveMapper\DriveMapper.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
+dotnet publish .\Install\Install.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
+```
+
+---
+
+## Troubleshooting
+
+- Check registry policy:
+  ```powershell
+  Get-ChildItem HKCU:\Software\Policies\DriveMapper\Drives
+  ```
+- Check Event Viewer:
+  - Windows Logs → Application
+  - Source: **DriveMapper**
+- If drives don’t map immediately, wait for:
+  - Network change
+  - Next logon
+
+---
 
 ## License
 
-GPL. Use freely with credit www.cloudcondensate.ca <info@cloudcondensate.ca>
+GPL.  
+Original project by `icds250`.  
+This fork extends functionality for Intune / Entra ID environments.
