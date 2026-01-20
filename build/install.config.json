@@ -2,7 +2,7 @@
   "TargetDirectory": "C:\\Program Files\\DriveMapper",
   "ExeName": "DriveMapper.exe",
   "ShortcutName": "",
-  "Version": "1",
+  "Version": "1.2",
   "ScheduledTasks": [
     {
       "TaskName": "DriveMapper",
