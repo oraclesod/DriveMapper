@@ -31,15 +31,11 @@ Drive mappings are controlled via **ADMX-backed registry policy** applied to **u
 
 For each drive letter (`A`–`Z`), DriveMapper reads:
 
-#### User policy (preferred)
+#### User policy
 ```
 HKCU\Software\Policies\DriveMapper\Drives\<LETTER>\
 ```
 
-#### Machine policy (fallback)
-```
-HKLM\Software\Policies\DriveMapper\Drives\<LETTER>\
-```
 
 ### Supported Values
 
@@ -49,14 +45,6 @@ HKLM\Software\Policies\DriveMapper\Drives\<LETTER>\
 | `Path` | REG_SZ | UNC path (e.g. `\\server\\share`) |
 | `Name` | REG_SZ | Optional display name (best-effort) |
 | `Reconnect` | DWORD (0/1) | Persistent mapping |
-
-### Precedence Rules
-
-For each drive letter:
-
-1. HKLM mapping is read (if present)
-2. HKCU mapping is read (if present)
-3. **HKCU overrides HKLM** for that letter
 
 ---
 
@@ -194,22 +182,6 @@ Install.exe install.config.json uninstall
      HKLM `SOFTWARE\<ExeNameWithoutExtension>\Version`
 
 Assignments should typically target **users**, not devices.
-
----
-
-## Build
-
-```powershell
-dotnet restore
-dotnet build DriveMapper.sln -c Release
-```
-
-### Publish (recommended for Intune)
-
-```powershell
-dotnet publish .\DriveMapper\DriveMapper.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
-dotnet publish .\Install\Install.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true
-```
 
 ---
 
