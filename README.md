@@ -116,7 +116,6 @@ To deploy this installer via Intune:
    - `Install.exe`
    - `install.config.json`
    - `DriveMapper.exe`
-   - `config.json`
 
 2. Create an `.intunewin` file from the folder.
 
