@@ -6,6 +6,8 @@ Deploy these applications together as an intunewin win32 app to map on-prem file
 
 Installer is a standalone .NET 8 installer utility that copies files to a target directory, registers scheduled tasks, and optionally creates a Start Menu shortcut. It's designed to be deployed via Intune or manually, with parameters provided via a JSON configuration file.
 
+Drive Maps are controlled by ADMX that should be uploaded to Intune and applied to users (not machines)
+
 ## Features
 
 - Copies all files from the installer's directory to a specified target directory.
@@ -98,37 +100,13 @@ This ensures compatibility with both Windows 10 and Windows 11.
 
 ### Key Features
 
-- Maps one or more network drives.
-- Supports conditional logic (e.g., based on group membership).
+- Maps one or more network drives based on registry keys set by intune ADMX policy applied to users
 - Designed to be executed silently as a scheduled task.
 - Does not require user interaction once deployed.
 
 ### Integration with Installer
 
 This utility is bundled alongside `Install.exe` and referenced within `config.json` as the `ExeName`. The installer schedules it to run under specific conditions (logon, boot, or network change) as configured, ensuring persistent and reliable drive availability for users.
-
-### Example DriveMapper JSON
-
-```json
-{
-  "Domain": "corp.example.com",
-  "DriveMappings": [
-    {
-      "Name": "Files",
-      "Group": "intune_map_n_drive",
-      "Path": "\\\\fs01\\data",
-      "DriveLetter": "N"
-    },
-    {
-      "Name": "Photos",
-      "Group": "intune_map_o_drive",
-      "Path": "\\\\fs01\\photos",
-      "DriveLetter": "O"
-    }
-  ]
-}
-
-```
 
 ## Intune Deployment
 
